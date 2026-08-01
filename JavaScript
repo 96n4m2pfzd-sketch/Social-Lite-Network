@@ -34,5 +34,4 @@ async function inviaPost() {
     });
     
     document.getElementById('testoPost').value = '';
-    caricaPost(); // Aggiorna la lista
-}
+    caricaPost(); // Aggiorna 
