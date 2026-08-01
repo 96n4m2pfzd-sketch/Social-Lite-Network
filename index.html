@@ -1,1 +1,214 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SocialLite | Official App</title>
+    <!-- Librerie Esterne -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .post-card { background: white; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .loading-spinner { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- CONFIGURAZIONE CHIAVI ---
+        // Sostituisci questi due valori con quelli del tuo progetto Supabase
+        const SUPABASE_URL = 'https://IL_TUO_ID.supabase.co';
+        const SUPABASE_KEY = 'LA_TUA_CHIAVE_ANONIMA_PUBLIC';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        function SocialApp() {
+            const [session, setSession] = useState(null);
+            const [profile, setProfile] = useState(null);
+            const [posts, setPosts] = useState([]);
+            const [view, setView] = useState('feed'); // 'feed' o 'profile'
+            const [loading, setLoading] = useState(false);
+            const [newPost, setNewPost] = useState("");
+
+            useEffect(() => {
+                // Gestione Sessione
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                    setSession(session);
+                    if (session) fetchProfile(session.user.id);
+                });
+
+                const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+                    setSession(session);
+                    if (session) fetchProfile(session.user.id);
+                });
+
+                fetchPosts();
+                return () => authListener.subscription.unsubscribe();
+            }, []);
+
+            async function fetchProfile(id) {
+                const { data } = await supabase.from('profiles').select('*').eq('id', id).single();
+                setProfile(data);
+            }
+
+            async function fetchPosts() {
+                const { data, error } = await supabase
+                    .from('posts')
+                    .select('*, profiles(username, avatar_url)')
+                    .order('created_at', { ascending: false });
+                if (!error) setPosts(data);
+            }
+
+            async function handleAuth() {
+                const email = prompt("Inserisci la tua Email:");
+                const password = prompt("Inserisci la Password:");
+                if (!email || !password) return;
+
+                const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+                
+                if (loginError) {
+                    const { error: signUpError } = await supabase.auth.signUp({ 
+                        email, 
+                        password,
+                        options: { data: { username: email.split('@')[0] } }
+                    });
+                    if (signUpError) alert("Errore: " + signUpError.message);
+                    else alert("Registrazione effettuata! Controlla la email.");
+                }
+            }
+
+            async function handleCreatePost() {
+                if (!newPost.trim()) return;
+                setLoading(true);
+                const { error } = await supabase.from('posts').insert([
+                    { content: newPost, user_id: session.user.id }
+                ]);
+                if (!error) {
+                    setNewPost("");
+                    fetchPosts();
+                }
+                setLoading(false);
+            }
+
+            async function uploadAvatar(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                setLoading(true);
+                const fileExt = file.name.split('.').pop();
+                const fileName = `${session.user.id}.${fileExt}`;
+                
+                await supabase.storage.from('avatars').upload(fileName, file, { upsert: true });
+                const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
+                
+                await supabase.from('profiles').update({ avatar_url: data.publicUrl }).eq('id', session.user.id);
+                setProfile({ ...profile, avatar_url: data.publicUrl });
+                setLoading(false);
+            }
+
+            // SCHERMATA LOGIN
+            if (!session) {
+                return (
+                    <div className="h-screen flex flex-col items-center justify-center bg-blue-600 text-white p-6">
+                        <i className="fab fa-facebook text-8xl mb-4"></i>
+                        <h1 className="text-4xl font-bold mb-8 italic tracking-tighter">SocialLite</h1>
+                        <button onClick={handleAuth} className="bg-white text-blue-600 w-full max-w-xs py-4 rounded-xl font-bold text-lg shadow-2xl hover:bg-gray-100 transition">
+                            Accedi o Registrati
+                        </button>
+                        <p className="mt-6 opacity-70 text-sm text-center">Connettiti con gli amici e il mondo intorno a te.</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="max-w-2xl mx-auto pb-24">
+                    {/* Header */}
+                    <nav className="bg-white border-b sticky top-0 z-50 p-3 flex justify-between items-center px-4">
+                        <h1 className="text-2xl font-black text-blue-600">SL</h1>
+                        <div className="flex space-x-6 text-2xl text-gray-400">
+                            <i onClick={() => setView('feed')} className={`fas fa-home cursor-pointer ${view === 'feed' && 'text-blue-600'}`}></i>
+                            <i onClick={() => setView('profile')} className={`fas fa-user-circle cursor-pointer ${view === 'profile' && 'text-blue-600'}`}></i>
+                        </div>
+                    </nav>
+
+                    {/* Contenuto */}
+                    <main className="p-4">
+                        {view === 'feed' ? (
+                            <div className="space-y-4">
+                                {/* Box Creazione Post */}
+                                <div className="post-card p-4">
+                                    <div className="flex space-x-3">
+                                        <img src={profile?.avatar_url || 'https://via.placeholder.com/40'} className="w-10 h-10 rounded-full border" />
+                                        <textarea 
+                                            value={newPost}
+                                            onChange={(e) => setNewPost(e.target.value)}
+                                            placeholder={`A cosa stai pensando, ${profile?.username || 'amico'}?`}
+                                            className="w-full bg-gray-100 rounded-2xl p-3 outline-none resize-none"
+                                        />
+                                    </div>
+                                    <div className="flex justify-end mt-3 pt-2 border-t">
+                                        <button 
+                                            onClick={handleCreatePost}
+                                            disabled={loading}
+                                            className="bg-blue-600 text-white px-6 py-1.5 rounded-full font-bold hover:bg-blue-700 disabled:opacity-50"
+                                        >
+                                            {loading ? '...' : 'Pubblica'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Feed */}
+                                {posts.map(post => (
+                                    <div key={post.id} className="post-card p-4 animate-in fade-in duration-500">
+                                        <div className="flex items-center mb-3">
+                                            <img src={post.profiles?.avatar_url || 'https://via.placeholder.com/40'} className="w-10 h-10 rounded-full mr-3 border" />
+                                            <div>
+                                                <p className="font-bold text-sm">@{post.profiles?.username || 'utente'}</p>
+                                                <p className="text-xs text-gray-400">{new Date(post.created_at).toLocaleDateString()}</p>
+                                            </div>
+                                        </div>
+                                        <p className="text-gray-800 leading-relaxed">{post.content}</p>
+                                        <div className="mt-4 pt-3 border-t flex justify-around text-gray-500 font-bold text-sm">
+                                            <button className="flex-1 hover:bg-gray-50 py-2 rounded-lg"><i className="far fa-thumbs-up mr-2"></i>Like</button>
+                                            <button className="flex-1 hover:bg-gray-50 py-2 rounded-lg"><i className="far fa-comment mr-2"></i>Commenta</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            // Vista Profilo
+                            <div className="post-card p-8 text-center">
+                                <div className="relative inline-block">
+                                    <img src={profile?.avatar_url || 'https://via.placeholder.com/150'} className="w-32 h-32 rounded-full mx-auto border-4 border-blue-500 object-cover shadow-lg" />
+                                    <label className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full cursor-pointer shadow-md hover:bg-blue-700 transition">
+                                        <i className="fas fa-camera"></i>
+                                        <input type="file" className="hidden" onChange={uploadAvatar} accept="image/*" />
+                                    </label>
+                                </div>
+                                <h2 className="text-2xl font-bold mt-4">{profile?.username || 'Il tuo Profilo'}</h2>
+                                <p className="text-gray-500 mb-8">{session.user.email}</p>
+                                <button 
+                                    onClick={() => supabase.auth.signOut()} 
+                                    className="w-full bg-red-50 text-red-600 font-bold py-3 rounded-xl border border-red-200 hover:bg-red-100 transition"
+                                >
+                                    Disconnetti
+                                </button>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SocialApp />);
+    </script>
+</body>
+</html>
