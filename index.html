@@ -1,37 +1,5 @@
-supabase.co';
-        const SUPABASE_KEY = 'LA_TUA_CHIAVE_ANONIMA_PUBLIC';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        function SocialApp() {
-            const [session, setSession] = useState(null);
-            const [profile, setProfile] = useState(null);
-            const [posts, setPosts] = useState([]);
-            const [view, setView] = useState('feed'); // 'feed' o 'profile'
-            const [loading, setLoading] = useState(false);
-            const [newPost, setNewPost] = useState("");
-
-            useEffect(() => {
-                // Gestione Sessione
-                supabase.auth.getSession().then(({ data: { session } }) => {
-                    setSession(session);
-                    if (session) fetchProfile(session.user.id);
-                });
-
-                const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-                    setSession(session);
-                    if (session) fetchProfile(session.user.id);
-                });
-
-                fetchPosts();
-                return () => authListener.subscription.unsubscribe();
-            }, []);
-
-            async function fetchProfile(id) {
-                const { data } = await supabase.from('profiles').select('*').eq('id', id).single();
-                setProfile(data);
-            }
-
-            async function fetchPosts() {
+  async function fetchPosts() {
                 const { data, error } = await supabase
                     .from('posts')
                     .select('*, profiles(username, avatar_url)')
@@ -185,3 +153,4 @@ supabase.co';
 </body>
 </html>
 
+          
