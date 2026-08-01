@@ -1,14 +1,6 @@
-async function fetchPosts() {
-                const { data, error } = await supabase
-                    .from('posts')
-                    .select('*, profiles(username, avatar_url)')
-                    .order('created_at', { ascending: false });
-                if (!error) setPosts(data);
-            }
 
-            async function handleAuth() {
-                const email = prompt("Inserisci la tua Email:");
-                const password = prompt("Inserisci la Password:");
+
+            );
                 if (!email || !password) return;
 
                 const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
