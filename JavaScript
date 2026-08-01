@@ -1,1 +1,2 @@
-
+const SUPABASE_URL = 'https://tuoid.supabase.co';
+const SUPABASE_KEY = 'tua_chiave_anonima';
