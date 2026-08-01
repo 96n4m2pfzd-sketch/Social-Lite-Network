@@ -1,13 +1,142 @@
 <!DOCTYPE html>
 <html lang="it">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SocialLite</title>
-  </head>
-  <body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SocialLite | Real Social Network</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
 
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- INSERISCI QUI LE TUE CHIAVI SUPABASE PER RENDERLO REALE ---
+        const SB_URL = 'https://TUO_ID.supabase.co'; 
+        const SB_KEY = 'TUA_CHIAVE_ANONIMA';
+        const supabase = supabase.createClient(SB_URL, SB_KEY);
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [profile, setProfile] = useState(null);
+            const [posts, setPosts] = useState([]);
+            const [view, setView] = useState('feed');
+            const [loading, setLoading] = useState(false);
+
+            useEffect(() => {
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                    if (session) {
+                        setUser(session.user);
+                        fetchProfile(session.user.id);
+                    }
+                });
+                fetchPosts();
+            }, []);
+
+            async function fetchProfile(id) {
+                const { data } = await supabase.from('profiles').select('*').eq('id', id).single();
+                setProfile(data);
+            }
+
+            async function fetchPosts() {
+                const { data } = await supabase.from('posts').select('*, profiles(username, avatar_url)').order('created_at', { ascending: false });
+                setPosts(data || []);
+            }
+
+            async function handleLogin() {
+                const email = prompt("Inserisci la tua Email:");
+                const password = prompt("Inserisci la tua Password:");
+                const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+                if (error) {
+                    const { data: sData, error: sError } = await supabase.auth.signUp({ email, password });
+                    if (sError) alert(sError.message);
+                    else alert("Registrazione completata! Controlla la mail.");
+                } else {
+                    window.location.reload();
+                }
+            }
+
+            async function uploadAvatar(e) {
+                const file = e.target.files[0];
+                const fileName = `${user.id}-${Date.now()}`;
+                setLoading(true);
+                await supabase.storage.from('avatars').upload(fileName, file);
+                const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
+                await supabase.from('profiles').update({ avatar_url: data.publicUrl }).eq('id', user.id);
+                setProfile({...profile, avatar_url: data.publicUrl});
+                setLoading(false);
+            }
+
+            if (!user) {
+                return (
+                    <div className="h-screen flex flex-col items-center justify-center bg-blue-600 text-white p-10 text-center">
+                        <i className="fas fa-users text-8xl mb-6"></i>
+                        <h1 className="text-5xl font-black mb-4">SocialLite</h1>
+                        <p className="text-xl opacity-80 mb-10">Il tuo nuovo spazio libero.</p>
+                        <button onClick={handleLogin} className="bg-white text-blue-600 px-12 py-4 rounded-full font-bold text-xl shadow-2xl">Accedi / Entra</button>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen pb-20">
+                    <nav className="bg-white border-b sticky top-0 flex justify-between p-4 px-6 items-center z-50">
+                        <h1 className="text-2xl font-black text-blue-600">SL</h1>
+                        <div className="flex space-x-6 text-2xl text-gray-400">
+                            <i onClick={() => setView('feed')} className={`fas fa-home cursor-pointer ${view==='feed' && 'text-blue-600'}`}></i>
+                            <i onClick={() => setView('profile')} className={`fas fa-user-circle cursor-pointer ${view==='profile' && 'text-blue-600'}`}></i>
+                        </div>
+                    </nav>
+
+                    <div className="max-w-md mx-auto p-4">
+                        {view === 'feed' ? (
+                            <div className="space-y-4">
+                                {posts.map(p => (
+                                    <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+                                        <div className="flex items-center mb-3">
+                                            <img src={p.profiles?.avatar_url || 'https://via.placeholder.com/40'} className="w-10 h-10 rounded-full mr-3 border" />
+                                            <span className="font-bold">@{p.profiles?.username || 'utente'}</span>
+                                        </div>
+                                        <p className="text-gray-800">{p.content}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="bg-white p-8 rounded-3xl shadow-lg text-center">
+                                <div className="relative inline-block">
+                                    <img src={profile?.avatar_url || 'https://via.placeholder.com/150'} className="w-32 h-32 rounded-full mx-auto border-4 border-blue-500 object-cover" />
+                                    <label className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full cursor-pointer">
+                                        <i className="fas fa-camera"></i>
+                                        <input type="file" className="hidden" onChange={uploadAvatar} />
+                                    </label>
+                                </div>
+                                <h2 className="text-2xl font-bold mt-4">{profile?.username || user.email}</h2>
+                                <button onClick={() => supabase.auth.signOut().then(() => location.reload())} className="mt-6 text-red-500 font-bold border border-red-500 px-6 py-2 rounded-full">Esci</button>
+                            </div>
+                        )}
+                    </div>
+
+                    <button 
+                        onClick={async () => {
+                            const c = prompt("Cosa pensi?");
+                            if(c) { await supabase.from('posts').insert([{ content: c, user_id: user.id }]); fetchPosts(); }
+                        }}
+                        className="fixed bottom-6 right-6 bg-blue-600 text-white w-16 h-16 rounded-full shadow-2xl text-2xl"
+                    >
+                        <i className="fas fa-plus"></i>
+                    </button>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
