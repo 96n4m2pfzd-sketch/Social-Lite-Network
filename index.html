@@ -1,11 +1,4 @@
 
-
-            );
-                if (!email || !password) return;
-
-                const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-                
-                if (loginError) {
                     const { error: signUpError } = await supabase.auth.signUp({ 
                         email, 
                         password,
@@ -147,3 +140,5 @@
           
 
   
+
+                
