@@ -1,5 +1,4 @@
-
-  async function fetchPosts() {
+async function fetchPosts() {
                 const { data, error } = await supabase
                     .from('posts')
                     .select('*, profiles(username, avatar_url)')
@@ -154,3 +153,5 @@
 </html>
 
           
+
+  
