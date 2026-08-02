@@ -1,1 +1,277 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const twilio = require('twilio');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: "*" }
+});
+
+app.use(express.json());
+
+// =====================================================================
+// 1. CONFIGURAZIONE DATABASE (MONGODB) & MODELLI
+// =====================================================================
+mongoose.connect('mongodb://localhost:27017/facebook_clone_advanced', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+}).then(() => console.log('Database MongoDB connesso con successo!'))
+  .catch(err => console.error('Errore di connessione al database:', err));
+
+// Modello Utente (Profilo, Credenziali, Stato e OTP)
+const UserSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true },
+    phone: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    profilePicture: { type: String, default: '' },
+    coverPicture: { type: String, default: '' },
+    otpCode: { type: String },
+    otpExpires: { type: Date },
+    isOnline: { type: Boolean, default: false },
+    lastSeen: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+const User = mongoose.model('User', UserSchema);
+
+// Modello Post (Testo, Media, Like ed Emoji nei Commenti)
+const PostSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    content: { type: String },
+    mediaUrl: { type: String },
+    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    comments: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        text: String, // Supporta emoji
+        createdAt: { type: Date, default: Date.now }
+    }]
+}, { timestamps: true });
+
+const Post = mongoose.model('Post', PostSchema);
+
+// Modello Storie (Scadenza automatica a 24 ore)
+const StorySchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    mediaUrl: { type: String, required: true },
+    expiresAt: { type: Date, required: true, index: { expires: '24h' } }
+}, { timestamps: true });
+
+const Story = mongoose.model('Story', StorySchema);
+
+// =====================================================================
+// 2. CONFIGURAZIONE TWILIO (SMS & OTP)
+// =====================================================================
+const accountSid = 'IL_TUO_TWILIO_ACCOUNT_SID';
+const authToken = 'IL_TUO_TWILIO_AUTH_TOKEN';
+const twilioPhoneNumber = 'IL_TUO_NUMERO_TWILIO';
+const twilioClient = twilio(accountSid, authToken);
+
+// =====================================================================
+// 3. API REST: AUTENTICAZIONE, PROFILO, PASSWORD & OTP
+// =====================================================================
+
+// Richiesta Codice OTP via SMS per cambio/recupero password
+app.post('/api/auth/forgot-password-request', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const user = await User.findOne({ phone });
+        if (!user) return res.status(404).json({ success: false, message: 'Numero di cellulare non registrato.' });
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        user.otpCode = otp;
+        user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // Valido 10 minuti
+        await user.save();
+
+        await twilioClient.messages.create({
+            body: `Il tuo codice di verifica OTP è: ${otp}. Scade in 10 minuti.`,
+            from: twilioPhoneNumber,
+            to: phone
+        });
+
+        res.status(200).json({ success: true, message: 'Codice OTP inviato via SMS con successo.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore invio SMS.', error: error.message });
+    }
+});
+
+// Verifica OTP e Reimpostazione Password
+app.post('/api/auth/verify-otp-reset-password', async (req, res) => {
+    try {
+        const { phone, otp, newPassword } = req.body;
+        const user = await User.findOne({ phone, otpCode: otp, otpExpires: { $gt: Date.now() } });
+        if (!user) return res.status(400).json({ success: false, message: 'Codice OTP non valido o scaduto.' });
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        user.otpCode = undefined;
+        user.otpExpires = undefined;
+        await user.save();
+
+        res.status(200).json({ success: true, message: 'Password reimpostata con successo!' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore durante il reset.', error: error.message });
+    }
+});
+
+// Modifica Password da Profilo (Utente Loggato)
+app.post('/api/auth/change-password', async (req, res) => {
+    try {
+        const { userId, currentPassword, newPassword } = req.body;
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ success: false, message: 'Utente non trovato.' });
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) return res.status(400).json({ success: false, message: 'La password attuale non è corretta.' });
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        await user.save();
+
+        res.status(200).json({ success: true, message: 'Password aggiornata con successo!' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore del server.', error: error.message });
+    }
+});
+
+// Aggiornamento Foto Profilo e Immagine Copertina
+app.put('/api/user/update-cover-profile/:userId', async (req, res) => {
+    try {
+        const { profilePicture, coverPicture } = req.body;
+        const updateData = {};
+        if (profilePicture) updateData.profilePicture = profilePicture;
+        if (coverPicture) updateData.coverPicture = coverPicture;
+
+        const updatedUser = await User.findByIdAndUpdate(req.params.userId, updateData, { new: true });
+        res.status(200).json({ success: true, message: 'Profilo aggiornato!', user: updatedUser });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore aggiornamento.', error: error.message });
+    }
+});
+
+// Pubblicazione Post (con supporto foto/video)
+app.post('/api/posts', async (req, res) => {
+    try {
+        const { userId, content, mediaUrl } = req.body;
+        const newPost = new Post({ userId, content, mediaUrl });
+        await newPost.save();
+        res.status(201).json({ success: true, post: newPost });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore creazione post.', error: error.message });
+    }
+});
+
+// Interazione Post: Like o Commento con Emoji
+app.post('/api/posts/:postId/interact', async (req, res) => {
+    try {
+        const { userId, type, text } = req.body; // type: 'like' o 'comment'
+        const post = await Post.findById(req.params.postId);
+
+        if (type === 'like') {
+            if (!post.likes.includes(userId)) post.likes.push(userId);
+            else post.likes.pull(userId);
+        } else if (type === 'comment') {
+            post.comments.push({ userId, text });
+        }
+
+        await post.save();
+        res.status(200).json({ success: true, post });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore interazione.', error: error.message });
+    }
+});
+
+// Pubblicazione Storia (Scadenza 24 ore)
+app.post('/api/stories', async (req, res) => {
+    try {
+        const { userId, mediaUrl } = req.body;
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 ore esatte
+        const newStory = new Story({ userId, mediaUrl, expiresAt });
+        await newStory.save();
+        res.status(201).json({ success: true, story: newStory });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Errore caricamento storia.', error: error.message });
+    }
+});
+
+
+// =====================================================================
+// 4. CHAT IN TEMPO REALE, POSIZIONE, CHIAMATE E VIDEOCHIAMATE (SOCKET.IO)
+// =====================================================================
+const onlineUsers = new Map();
+
+io.on('connection', (socket) => {
+    console.log(`Utente connesso via socket: ${socket.id}`);
+
+    // Gestione Accesso / Stato Online con data, mese e anno corretti
+    socket.on('user_connected', async (userId) => {
+        onlineUsers.set(userId, socket.id);
+        const currentTime = new Date(); // Gestisce automaticamente data, mese e anno correnti
+        await User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: currentTime });
+        io.emit('update_user_status', { userId, isOnline: true, lastSeen: currentTime });
+    });
+
+    // Invio Messaggi Privati (Testo, Audio, File multimediali, Posizione GPS) + Spunte
+    socket.on('send_message', (data) => {
+        const { senderId, receiverId, message, type } = data; // type: 'text', 'audio', 'image', 'location'
+        const receiverSocketId = onlineUsers.get(receiverId);
+
+        const messageData = {
+            senderId,
+            message,
+            type,
+            timestamp: new Date(),
+            status: receiverSocketId ? 'delivered' : 'sent' // Spunte: ✓ (inviato) o ✓✓ (consegnato)
+        };
+
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('receive_message', messageData);
+        }
+    });
+
+    // Indicatore "Sta scrivendo..."
+    socket.on('typing', ({ senderId, receiverId }) => {
+        const receiverSocketId = onlineUsers.get(receiverId);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('display_typing', { senderId });
+        }
+    });
+
+    // Segnalazione WebRTC per Chiamate e Videochiamate in chat privata
+    socket.on('call_user', ({ userToCall, signalData, from, name, type }) => { // type: 'audio' o 'video'
+        const receiverSocketId = onlineUsers.get(userToCall);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('incoming_call', { signal: signalData, from, name, callType: type });
+        }
+    });
+
+    socket.on('answer_call', (data) => {
+        const receiverSocketId = onlineUsers.get(data.to);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('call_accepted', data.signal);
+        }
+    });
+
+    // Gestione Disconnessione e Stato Ultimo Accesso (Data, Mese, Anno aggiornati)
+    socket.on('disconnect', async () => {
+        for (let [userId, socketId] of onlineUsers.entries()) {
+            if (socketId === socket.id) {
+                onlineUsers.delete(userId);
+                const exactDisconnectTime = new Date();
+                await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: exactDisconnectTime });
+                io.emit('update_user_status', { userId, isOnline: false, lastSeen: exactDisconnectTime });
+                break;
+            }
+        }
+        console.log('Utente disconnesso');
+    });
+});
+
+// Avvio Server Definitivo sulla porta 5000
+server.listen(5000, () => {
+    console.log('Server principale avanzato avviato con successo sulla porta 5000!');
+});
 
